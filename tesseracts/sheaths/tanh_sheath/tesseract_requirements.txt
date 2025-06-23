@@ -1,0 +1,6 @@
+../../../../spscml
+jax[cpu]==0.6.0
+jpu
+equinox
+boto3
+lineax @ git+https://github.com/jpbrodrick89/lineax.git@jpb/novmap

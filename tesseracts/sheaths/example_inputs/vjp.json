@@ -1,0 +1,6 @@
+{
+    "inputs": {"n": 6e22, "T": 20.0, "Vp": 1500.0, "Lz": 0.5 }, 
+    "vjp_inputs": ["Vp"], 
+    "vjp_outputs": ["j"], 
+    "cotangent_vector": { "j": 5.3e6 }
+}

@@ -1,0 +1,397 @@
+\documentclass{article}
+
+\title{Optimizing fusion gain through a simplified whole-device model}
+
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{siunitx}
+\usepackage[margin=1in]{geometry}
+\usepackage{parskip}
+\usepackage{circuitikz}
+\usepackage{bm}
+
+\usepackage{biblatex}
+\addbibresource{references.bib}
+
+\newcommand{\jack}[1]{{\color{ForestGreen} #1}}
+
+\begin{document}
+\maketitle
+
+\section{Introduction}
+
+This document describes a proposed modeling problem for the summer school hackathon.
+We'll first describe the physical picture and motivation, then the governing equations, and finally
+the configuration of software components we'll use to investigate it.
+
+The setting is the on-axis plasma in a Z Pinch device, bounded on one end by a cathode and on the
+other by an anode.
+As the Z Pinch current ramps up, and the plasma undergoes compression, on-axis current must connect
+through a Langmuir sheath at both electrodes.
+The dynamics of the current can be modeled as a series RLC circuit: a circuit containing a resistor,
+an inductor, and a capacitor.
+The RLC circuit equations let us relate the plasma current, which can be observed from the quasi-steady 
+solution of our plasma kinetic equations, to the plasma voltage gap; that is, the voltage gap
+across the plasma-facing electrodes.
+
+The final piece of the picture is adiabatic compression. To a first approximation, we can assume
+that the pinch is compressing adiabatically, which gives scaling relations between the plasma current
+and the on-axis bulk plasma quantities, such as number density and temperature.
+
+Putting all of these pieces together, there is a potential optimization problem to be investigated:
+what combination of circuit and plasma parameters maximizes a quantity of interest such as time-integrated
+neutron yield, or perhaps Q-scientific?
+If the circuit model, bulk plasma model, and sheath model can all be implemented in a differentiable
+program, then the optimization problem can be tackled with a derivative-based optimizer.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.6\textwidth]{images/circuit_diagram.pdf}
+\end{figure}
+
+
+\section{Circuit model}
+
+This section describes the series RLC circuit equations for a discharging capacitor.
+Let $Q(t)$ be the charge in the capacitor, $C$ the capacitance, $R$ the resistance,
+and $L$ the total inductance of the circuit.
+The total current is assumed constant throughout the circuit, and is equal to the rate of change of the charge:
+\begin{align*}
+    I = I_p = \dot{Q}.
+\end{align*}
+The voltages of each component are related by Kirchoff's voltage law
+\begin{align}
+V_R + V_L + V_C - V_p = 0,
+\end{align}
+where $V_p$ is the voltage drop across the plasma, and $V_R, V_L, V_C$ are the voltage drops across the resistor, inductor, and capacitor respectively.
+The sign of $V_p$ is determined by our chosen convention, that $V_p = \phi_A - \phi_C$, where $\phi_A, \phi_C$ are the potentials at the
+anode and cathode, respectively.
+
+From the definition of capacitance we have $V_C = Q(t)/C$. From Ohm's law we have $V_R = I_p R = \dot{Q} R$, 
+and $V_L = L \dot{I} = L \ddot{Q}$.
+Finally, we decompose the plasma voltage into the sum of a resistive component and an inductive component:
+\begin{align*}
+    V_p = V_{Rp} + L_p \ddot{Q} 
+\end{align*}
+
+Combining all of the voltage terms, we obtain a second-order ODE for $Q(t)$:
+\begin{align}
+    \label{eqn:rlc}
+    (L - L_p) \ddot{Q} + R \dot{Q} + \frac{Q}{C} = V_{Rp}
+\end{align}
+Equation \eqref{eqn:rlc} is not trivial to solve, because $\dot{Q}$ and $V_p$ are related
+via a complex plasma model.
+For now, we may consider that we have a forward plasma model that lets us compute the 
+current driven by any given bias voltage:
+\begin{align*}
+I_p = I_p(V_p; \; T, n, L).
+\end{align*}
+We have included the assumed dependence on temperature, density and plasma length as parameters
+for illustration purposes; in what follows we omit these parameters.
+
+An implicit Euler scheme for \eqref{eqn:rlc} is
+\begin{align}
+    \label{eqn:implicit_euler}
+\begin{bmatrix}
+    Q^{n+1} \\ \dot{Q}^{n+1}
+\end{bmatrix}
+=
+\begin{bmatrix}
+    Q^{n} \\ \dot{Q}^{n}
+\end{bmatrix}
++
+\Delta t
+\begin{bmatrix}
+    I_p^{n+1} \\
+    \frac{1}{L - L_p} \left( -Q^{n+1} / C - R I_p^{n+1} + V_{Rp}^{n+1} \right) 
+\end{bmatrix}.
+\end{align}
+This may be solved by finding the root of the residual function
+\begin{align*}
+\mathcal{R} \left( \begin{bmatrix}
+        Q^{n+1} \\ V_p^{n+1}
+\end{bmatrix} \right) 
+=
+\begin{bmatrix}
+    Q^{n+1} - Q^n - \Delta t I_p^{n+1} \\
+    -I_p^{n+1} + \dot{Q}^n + \frac{\Delta t}{L - L_p} \left( -Q^{n+1}/C - R I_p^{n+1} - V_{Rp}^{n+1} \right) 
+\end{bmatrix},
+\end{align*}
+where $I_p^{n+1} = I_p(V_p^{n+1})$, and the resistive component of the plasma voltage must be solved for:
+\begin{align*}
+    V_{Rp}^{n+1} &= V_p^{n+1} - L_p \ddot{Q} \\
+                 &= V_p^{n+1} - \frac{L_p}{L - L_p} \left( -\frac{Q^{n+1}}{C} - R I_p^{n+1} - V_{Rp}^{n+1} \right),
+\end{align*}
+giving
+\begin{align*}
+    V_{Rp}^{n+1} = \left( 1 - \frac{L_p}{L - L_p} \right)^{-1} \left( V_p^{n+1} - \frac{L_p}{L - L_p} \left( -\frac{Q^{n+1}}{C} - R I_p^{n+1} \right) \right).
+\end{align*}
+
+The root of the residual $\mathcal{R}$ can be found by a Newton iteration.
+In a differentiable programming environment, such a routine is trivial to write,
+but it relies on the ability to evaluate the gradient of $I_p$.
+This indicates that for our circuit solve, we require an end-to-end differentiable 
+kinetic plasma simulation.
+
+
+\section{Incorporating plasma compression, resistive heating, and radiative cooling}
+
+As the capacitor discharge modeled by the above RLC circuit equations proceeds, the plasma
+between the electrode gap is far from static.
+Its bulk properties (principally density and temperature) change, which drive increasing
+fusion yield.
+For the purposes of this modeling exercise, we include three effects:
+\begin{itemize}
+    \item Adiabatic compression of the plasma on-axis
+    \item Resistive heating of the plasma by the plasma current
+    \item Radiative cooling of the plasma, principally by so-called Bremsstrahlung radiation
+\end{itemize}
+We incorporate these effects into an extended ODE model for current, temperature, and density,
+with the following time-splitting structure:
+\begin{align*}
+\frac{d}{dt} \begin{pmatrix}
+Q \\ I_p \\ T \\ n
+\end{pmatrix}
+=
+\begin{pmatrix}
+I \\ \ddot{Q} \\ 0 \\ 0
+\end{pmatrix}
++
+\begin{pmatrix}
+0 \\ 0 \\
+\left( \frac{d T}{dt} \right)_{rad} + \left( \frac{d T}{dt} \right)_{\eta} \\
+0
+\end{pmatrix}
++
+\begin{pmatrix}
+0 \\ 0 \\
+\left( \frac{dT}{dt} \right)_{comp} \\
+\left( \frac{dn}{dt} \right)_{comp}
+\end{pmatrix}.
+\end{align*}
+The idea is to step each term separately. 
+We begin with an Implicit Euler step of the current terms, described above,
+followed by an explicit solve of the radiative and resistive terms.
+Finally, we assume that the compression step occurs adiabatically and reaches
+radial force balance much faster than a single timestep.
+
+\subsection{Resistive heating}
+Resistive heating of a plasma follows a volumetric analogue to Ohm's law.
+Heating per unit volume is given by
+\begin{align*}
+    P_{\eta} = \eta j^2,
+\end{align*}
+where $\eta$ can be estimated by the (corrected) Spitzer resistivity \cite{goldstonIntroductionPlasmaPhysics1995a}
+\begin{align*}
+    \eta = \frac{1}{1.96} \frac{\sqrt{2} m_e^{1/2} Z e^2 \ln \Lambda}{12 \pi^{3/2} \epsilon_0^2 T^{3/2}},
+\end{align*}
+and we will use the average current density,
+\begin{align*}
+j = \frac{I}{\pi a^2},
+\end{align*}
+where $a = \sqrt{N / \pi n}$ is the pinch radius.
+
+Dividing by the volumetric density, we get
+\begin{align*}
+    \left( \frac{dT}{dt} \right)_\eta = \frac{P_{\eta}}{n} = \frac{\eta j^2}{n}.
+\end{align*}
+
+\subsection{Radiative losses}
+The primary radiative cooling of interest in a fusion plasma is bremsstrahlung radiation.
+This form of radiation is produced by electrons accelerating (or decelerating), and in a
+plasma is associated with Coulomb collisions between ions and electrons.
+
+The approximate volumetric power density of bremsstrahlung losses in a plasma is \cite{goldstonIntroductionPlasmaPhysics1995a}
+\begin{align*}
+    P_{br}[\unit{eV s^{-1} m^{-3}}] = 1.06 \times 10^{-19} Z^2 n_{e[\unit{m^{-3}}]} n_{i[\unit{m^{-3}}]} T_{[\unit{eV}]}^{1/2}.
+\end{align*}
+We can assume $n_e = Z n_i$, and for a hydrogen or D-T plasma we have $Z = 1$.
+Once again dividing by the volumetric density, we get
+\begin{align*}
+    \left( \frac{dT}{dt} \right)_{rad} = -\frac{P_{br}}{n}
+\end{align*}
+
+\subsection{Adiabatic compression}
+
+The principal effect of increasing the plasma current is to compress the plasma: as it seeks
+to maintain force balance between the confining magnetic field and its own thermal pressure,
+the latter increases.
+By making the reasonable assumption that this process is \emph{adiabatic}, meaning that
+it occurs slowly enough that no shock waves appear, we can derive scaling relations between
+two states that are connected by a compression event.
+Denoting the two states by subscripts 1 and 2, \cite{shumlakShearedFlowStabilizedZPinch2012}
+provides the following adiabatic scaling relations.
+We assume that the linear density $N$ is constant.
+
+For any plasma in radial force balance, the temperature is related to current by
+\begin{align*}
+\frac{T_2}{T_1} = \frac{I_2^2}{I_1^2}.
+\end{align*}
+The volumetric density scales as
+\begin{align*}
+    \frac{n_2}{n_1} = \left( \frac{T_2}{T_1} \right)^{\frac{1}{\gamma-1}},
+\end{align*}
+where $\gamma$ is the adiabatic constant, which we will take to be $5/3$.
+
+\subsection{Putting it all together}
+
+To advance from time $t^n$ to time $t^{n+1}$ we use the following scheme:
+\begin{align*}
+    &\begin{pmatrix}
+        Q^{n+1} \\
+        I_p^{n+1}
+    \end{pmatrix} = IE \begin{pmatrix}
+    Q^n \\ I_p^n
+    \end{pmatrix}, \\
+    &T' = T^n + \Delta t \left( \frac{P_{\eta}^n}{n^n} - \frac{P_{br}^n}{n^n} \right) \\
+    &T^{n+1} = (I_p^{n+1}/I_p^n)^2 T^n \\
+    &n^{n+1} = (T^{n+1} / T')^{\frac{1}{\gamma-1}} n^n
+\end{align*}
+where $IE$ represents a single timestep of the Implicit Euler scheme \eqref{eqn:implicit_euler}.
+To tell a story about the final three equations, $T'$ represents the temperature after
+a single timestep of non-adiabatic heating and cooling.
+Depending on whether resistive heating or radiative cooling dominates, the plasma is either over- or under-pressured
+at this point.
+It then undergoes expansion or compression until it is in radial force balance again.
+Its temperature in radial equilibrium is independent of $T'$, and depends only on the ratio of currents
+between times $t^{n+1}$ and $t^n$.
+However, the adiabatic expansion or compression is between states with temperatures $T'$ and $T^{n+1}$,
+so that the ratio of volumetric densities is determined by $T'$.
+
+\section{Kinetic modeling of the plasma sheath}
+
+For simulating the sheath dynamics, we need to carefully design the model problem in such a way
+that it preserves the steady-state behavior that we want, as well as the bulk resistivity.
+Both the sheath structure and the plasma resistivity are key to obtaining the correct plasma current density.
+We use a setup similar to that described in \cite{skolarContinuumKineticInvestigation2023}. The key features are:
+\begin{itemize}
+    \item A domain with a length of around 256 (in units of the Debye length), bounded on both ends by an absorbing wall boundary.
+        Inside the domain we solve the Vlasov-Poisson system, plus collisions to effect resistivity.
+    \item The desired bias voltage $V_p$ is applied as a boundary condition on the Poisson equation.
+    \item A "flux source term", whose role is to replace the particles lost to the walls, is applied to keep the total particle
+        number nearly constant. This lets us achieve a steady state solution.
+    \item A collision operator is localized to the center of the domain. Notionally, we let the interior two-thirds of the domain
+        correspond to the nearly $\num{5e5}$ Debye lengths between electrodes in a physical Z Pinch.
+        To obtain the correct resistivity, we enhance the collisionality (and thereby reduce the particle mean free path) by a
+        ratio corresponding to the ratio between the simulation domain length and the interelectrode gap.
+\end{itemize}
+
+
+The governing kinetic equation for our study is the 1D1V Vlasov-Poisson-BGK equation in
+the ``flexible plasma normalization'' \cite{millerMultispecies13momentModel2016}:
+\begin{align}
+    \label{eqn:vlasov_bgk}
+    \partial_t f_s + v \partial_x f_s + (\omega_c \tau) \frac{Z_s}{A_s} E \partial_v f_s &= Q(f_s) + \Gamma_s
+\end{align}
+The collision operator $Q$ is a linearized version of the BGK collision operator about an equilibrium
+distribution with temperature $T_{0}$ and velocity $u = 0$:
+\begin{align*}
+    Q(f_s) &= \nu_s(x) (M_s(v) - f_s),
+\end{align*}
+where
+\begin{align*}
+    M_s(v) = \frac{n_s(x)}{(2\pi T_0/A_s)^{1/2}} \exp \left( -\frac{A_s|v|^2}{2T_0} \right).
+\end{align*}
+The collision frequency $\nu_s(x)$ is spatially dependent, since we apply an increased collision frequency in the center of the domain
+in order to simulate equilibration with the bulk plasma.
+The physical mean free path is many thousands of Debye lengths, but our simulation domain is only a few hundred.
+Increasing $\nu$ lets us obtain a Maxwellian distribution in the center of the domain.
+
+The term $\Gamma_s$ is a source term localized to the center of the domain that serves to replenish particles lost to
+the absorbing wall:
+\begin{align*}
+    \Gamma_s = \gamma(x) M_s(v) = \left( \frac{1}{L_s} - \frac{|x|}{L_s^2} \right) F_{out} M_s(v),
+\end{align*}
+where $F_{out}$ is the flux of \emph{ions} out of the domain:
+\begin{align*}
+    F_{out} = \int v \left( f_i \vert_{x=-L/2} + f_i \vert_{x=L/2} \right) \, \mathrm{d} v
+\end{align*}
+
+The normalization constants appearing in Equation \eqref{eqn:vlasov_bgk} are as follows:
+\begin{itemize}
+    \item $Z_s$ and $A_s$ are the normalized charge and mass of species $s$, expressed in units of the proton charge and mass.
+    \item $\omega_c \tau$ is the normalized reference proton cyclotron frequency in a field $B_0$ which would give unit plasma beta: $|B_0|^2 / 2 \mu_0 = n_0 T_0$.
+\end{itemize}
+For now we can take these normalization constants as given; we will need to concern ourselves with their definitions when we
+move on to translating a specific physical problem into our equation setup.
+
+Equation \eqref{eqn:vlasov_bgk} is coupled to the normalized Gauss's law,
+\begin{align}
+\partial_x E = \frac{(\omega_p \tau)^2}{\omega_c \tau} \rho_c,
+\end{align}
+where
+\begin{align}
+    \rho_c = \sum_s Z_s \int f_s \,\mathrm{d} v
+\end{align}
+is the charge density.
+We will use the elliptic form of Gauss's law,
+\begin{align}
+\partial_x^2 \phi = -\frac{(\omega_p \tau)^2}{\omega_c \tau} \rho_c,
+\end{align}
+with $E = -\partial_x \phi$.
+
+\subsection{Domain and boundary conditions}
+
+We'll use a physical domain of length $L_x$, which by convention extends from $-L_x/2$ to $L_x/2$.
+
+\subsubsection{Absorbing wall}
+The simplest boundary condition that will produce a Langmuir sheath is the absorbing wall
+boundary condition. At a spatial boundary $x_b$ with outward normal vector $\mathbf{n}(x_b)$, we have
+\begin{align}
+    f_s^b(x_b, v) = \mathbf{1}_{\mathbf{n}(x_b) \cdot v < 0} f_s(x_, v),
+\end{align}
+where $\mathbf{1}$ is the indicator function.
+
+\subsection{Full-tensor discretization}
+
+We use the SSPRK2 time stepping scheme:
+\begin{align*}
+    f^{(1)} &= f^n + \Delta t \mathcal{V}(f^n) \\
+    f^{n+1} &= \frac{f^n}{2} + \frac{f^{(1)}}{2} + \Delta t \mathcal{V}(f^{(1)}),
+\end{align*}
+where $\mathcal{V}$ represents the right-hand side of the Vlasov-Poisson-BGK equation.
+First-order derivatives are discretized using a slope-limited finite volume scheme with direct upwinding based on the
+sign of the flux ($v$ or $E$).
+
+\subsection{Straightforward DLR scheme}
+
+This is a multispecies, collisional extension of the single-species scheme described in
+\cite{einkemmerLowRankProjectorSplittingIntegrator2018}.
+We give each species a low-rank ansatz:
+\begin{align*}
+    f(x, v, t) = \sum_{ij} X_i(x, t) S_{ij}(t) V_j(v, t)
+\end{align*}
+The time integration is accomplished with the projector-splitting integrator using a first-order
+Lie-Trotter splitting.
+Boundary conditions in $x$ must be applied to the $K$ basis functions, rather than $X$; this slightly modifies
+the form of the $\partial_x X$ terms in the S and L substeps. For a comprehensive description of the treatement
+of boundary conditions in the low-rank framework, see \cite{huAdaptiveDynamicalLow2022}.
+
+\subsubsection{Low-rank substeps}
+
+\textbf{K step:}
+\begin{align*}
+    \partial_t K_j &= -\sum_{l=1}^r \left\langle V_j, v^+ V_l \right\rangle_v D_+ K_l(x, t) - \sum_{l=1}^r \left\langle V_j, v^- V_l \right\rangle_v D_- K_l(x, t)  \\
+                         &\quad - (\omega_c \tau) \frac{Z}{A} \left[ \sum_{l=1}^r \left\langle V_j, D_+ V_l \right\rangle_v E_+ K_l(x, t) + \sum_{l=1}^r \left\langle V_j, D_- V_l \right\rangle_v E_- K_l(x, t) \right] \\
+                         &\quad + (\nu(x) + \gamma(x)) \left\langle V_j, M \right\rangle_v - \sum_{l=1}^r \nu(x)  \left\langle V_j, V_l \right\rangle_v K_l(x, t)
+\end{align*}
+
+\textbf{S step:}
+\begin{align*}
+    \partial_t S_{ij} &= \sum_{l=1}^r \left\langle V_j, v^+ V_l \right\rangle_v \left\langle X_i, D_+ K_l \right\rangle_x + \sum_{l=1}^r \left\langle V_j, v^- V_l \right\rangle_v \left\langle X_i, D_- K_l \right\rangle_x \\
+                      &\quad + (\omega_c \tau) \frac{Z}{A} \left[ \sum_{k,l=1}^r \left\langle V_j, D_+ V_l \right\rangle_v \left\langle X_i, E_+ X_k \right\rangle_x S_{kl} + \sum_{k,l=1}^r \left\langle V_j, D_- V_l \right\rangle_v \left\langle X_i, E_- X_k \right\rangle_x S_{kl} \right] \\
+                      &\quad - \left\langle X_i, \nu(x) +\gamma(x) \right\rangle_x \left\langle V_j, M \right\rangle_v + \sum_{k,l=1}^r \left\langle X_i, \nu(x) X_k \right\rangle_x \left\langle V_j, V_l \right\rangle_v  S_{kl}
+\end{align*}
+
+\textbf{L step:}
+\begin{align*}
+    \partial_t L_i &= -\sum_{l=1}^r v^+ V_l \left\langle X_i, D_+ K_l \right\rangle_x - \sum_{l=1}^r v^- V_l \left\langle X_i, D_- K_l \right\rangle_x \\
+                   &\quad - (\omega_c \tau) \frac{Z}{A} \left[ \sum_{k=1}^r \left\langle X_i, E_+ X_k \right\rangle_x D_+ L_k + \sum_{k=1}^r \left\langle X_i, E_- X_k \right\rangle_x D_- L_k  \right] \\
+                   &\quad + \left\langle X_i, \nu(x) + \gamma(x) \right\rangle_x M - \sum_{k=1}^r \left\langle X_i, \nu(x) X_k \right\rangle L_k
+\end{align*}
+
+
+
+\end{document}
