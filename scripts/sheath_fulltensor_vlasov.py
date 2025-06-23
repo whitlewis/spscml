@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import jax
 import matplotlib.pyplot as plt
 
+from spscml.poisson import poisson_solve
 from spscml.fulltensor_vlasov.solver import Solver
 from spscml.plasma import TwoSpeciesPlasma
 from spscml.grids import Grid, PhaseSpaceGrid
@@ -77,10 +78,6 @@ solver = Solver(plasma,
 solve = jax.jit(lambda: solver.solve(0.01/2, 12000, initial_conditions, boundary_conditions, 0.1))
 result = solve()
 
-E = solver.poisson_solve_from_fs(result, boundary_conditions)
-
-fig, axes = plt.subplots(3, 1, figsize=(10, 8))
-
 fe = result['electron']
 fi = result['ion']
 
@@ -95,6 +92,8 @@ ji = 1 * first_moment(fi, ion_grid)
 
 ne = zeroth_moment(fe, electron_grid)
 ni = zeroth_moment(fi, ion_grid)
+
+E = poisson_solve(x_grid, plasma, ni-ne, boundary_conditions)
 
 fig, axes = plt.subplots(4, 1, figsize=(10, 8))
 axes[0].imshow(fe.T, origin='lower')
