@@ -2,7 +2,7 @@ name: Multi-User Deploy
 
 on:
   push:
-    branches: ['jack_deploys']
+    branches: ['jack_deploys', '*_deploys']
   workflow_dispatch:
 
 jobs:
