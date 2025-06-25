@@ -11,6 +11,7 @@ dependencies = [
     "jpu>=0.0.5",
     "lineax",
     "mlflow>=2.22.1",
+    "optax>=0.2.5",
     "tesseract-core>=0.9.1",
 ]
 

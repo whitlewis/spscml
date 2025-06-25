@@ -17,6 +17,7 @@ import jpu
 import equinox as eqx
 import mlflow
 from spscml.whole_device_model.local_wrapper import apply
+import optax
 
 jax.config.update("jax_enable_x64", True)
 
@@ -40,16 +41,18 @@ def objective(Vp):
     net = power_out - power_lost
     return net * dt
 
-Vp = jnp.float64(1000)               # Plasma voltage
-Vp = Vp.astype(jnp.float64)
-obj_fn_value = objective(Vp)
-print(f"Objective function value for Vp={Vp} V: {obj_fn_value:.2f} W")
+print(objective(10000))
+# Vp =              # Plasma voltage
+# Vp = Vp.astype(jnp.float64)
+# obj_fn_value = objective(Vp)
+# print(f"Objective function value for Vp={Vp} V: {obj_fn_value:.2f} W")
 
-# try out grad of objective function with respect to Vp
+# # try out grad of objective function with respect to Vp
 
-f = lambda Vp: objective(Vp)
-grad_f = jax.grad(f)(jnp.array(Vp))
-print(f"Gradient of objective function at Vp={Vp} V: {grad_f:.2f} W/V")
+# f = lambda Vp: objective(Vp)
+# grad_f = jax.grad(f)(jnp.array(Vp))
+# print(f"Gradient of objective function at Vp={Vp} V: {grad_f:.2f} W/V")
+
 
 
 
