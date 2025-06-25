@@ -101,13 +101,33 @@ def solve_wdm_with_tesseract(inputs: dict, sheath_tesseract) -> dict:
     Nt = int(inputs['t_end'] / dt)
 
     def sheath_solve(Vp, T, n):
-        tx_inputs = dict(Vp=jnp.array(Vp),
-                         n=jnp.array(n),
-                         T=jnp.array(T),
-                         Lz=jnp.array(Lz),
-                         mlflow_parent_run_id=inputs['mlflow_run_id'])
-        j = apply_tesseract(sheath_tesseract, tx_inputs)['j']
-        Ip = j * inputs['N'] / n
+        # tx_inputs = dict(Vp=jnp.array(Vp),
+        #                  n=jnp.array(n),
+        #                  T=jnp.array(T),
+        #                  Lz=jnp.array(Lz),
+        #                  mlflow_parent_run_id=inputs['mlflow_run_id'])
+        # j = apply_tesseract(sheath_tesseract, tx_inputs)['j']
+
+        Vp = Vp * ureg.V
+        T = T * ureg.eV
+        n = n * (ureg.m**-3)
+
+        # Compute the saturation current I = 0.5 * e * n * c_S
+        gamma = 5/3
+        c_S = ((2*gamma*T / ureg.m_p)**0.5).to(ureg.m / ureg.s)
+        j_sat = 0.5 * ureg.e * n * c_S
+
+        alpha = (Vp * ureg.e / T).to('').magnitude
+        log_lambda = 10
+        eta_spitzer = (2*ureg.m_e)**0.5 * ureg.e**2 * log_lambda / (1.96*12*jnp.pi**1.5 * ureg.epsilon_0**2 * T**1.5)
+        E = Vp / (inputs["Lz"]*ureg.m)
+
+        j_eta = -(E / eta_spitzer).to(ureg.A / ureg.m**2)
+        j_sheath = (-jnp.tanh(alpha) * j_sat)
+        # Values are negative, so take the maximum
+        j = jnp.maximum(j_eta.magnitude, j_sheath.magnitude)
+
+        Ip = j * inputs['N'] / n.magnitude
         return Ip
 
     _, solution = wdm_solver.solve(dt, Nt, ics, sheath_solve)
