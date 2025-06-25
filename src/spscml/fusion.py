@@ -23,10 +23,10 @@ def fusion_power(n, L, a, T):
 
 # Returns the Bremsstrahlung power in units of eV / s
 def bremsstrahlung_power(n, L, a, T):
+    n = n*ureg.m ** -3
     P_br = n**2 * T**0.5 / (7.69e18)**2 * ureg.W / ureg.m**-3
-
     L = L * ureg.m
     a = a * ureg.m
     vol = L * jnp.pi*a**2
-    P_rad = (P_br * vol).to(ureg.W)
+    P_rad = (P_br * vol).to(ureg.W).magnitude
     return P_rad
