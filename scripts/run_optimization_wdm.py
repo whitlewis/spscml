@@ -37,7 +37,7 @@ def parse_args():
     # Default values
     Vc0 = 40*1e3  # 40kV
     T = 20.0      # 20 eV
-    Vp = 500.0    # 500 V
+    Vp = 2000     # V
     tesseract = "tanh_sheath"  # Default tesseract image
 
     R = 1.5e-3
@@ -100,7 +100,7 @@ elif tesseract_name == "vlasov_sheath":
 
 sheath_tx = Tesseract.from_tesseract_api(tesseract_api)
 
-def call_tess(Vc0, T_input, Vp_input, n0, tesseract_api) -> dict:
+def call_tess(Vc0, T_input, Vp_input, n0, tesseract_api, R, L, C) -> dict:
     Vp0 = Vp_input * ureg.volts
 
     T0 = T_input * ureg.eV
@@ -145,9 +145,9 @@ def extract_value(x):
     else:
         return x  # Already a scalar or something else
 
-def objective(Vp):
+def objective(Vp, R, L, C):
     # Vp = jnp.array(extract_value(Vp))
-    results = call_tess(Vc0, T_input, Vp, n0, tesseract_api) 
+    results = call_tess(Vc0, T_input, Vp, n0, tesseract_api, R, L, C) 
     dt = results["ts"][1] - results["ts"][0]
     diff = fusion_power(results["n"], Lz, results["a"], results["T"]) - bremsstrahlung_power(results["n"], Lz, results["a"], results["T"])
     return -diff.sum() * dt
