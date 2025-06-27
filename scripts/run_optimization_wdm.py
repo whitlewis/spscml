@@ -37,7 +37,7 @@ def parse_args():
     # Default values
     Vc0 = 40*1e3  # 40kV
     T = 20.0      # 20 eV
-    Vp = 2000     # V
+    Vp = 2000.0    # V
     tesseract = "tanh_sheath"  # Default tesseract image
 
     R = 1.5e-3
@@ -139,61 +139,73 @@ def call_tess(Vc0, T_input, Vp_input, n0, tesseract_api, R, L, C) -> dict:
 
 def extract_value(x):
     # Check if it's a NumPy or JAX array
-    if isinstance(x, (np.ndarray, jnp.ndarray)):
-        # If it's a scalar array like np.array([1.0]), return the scalar
-            return x.item()
-    else:
-        return x  # Already a scalar or something else
+    new_x = []
+    for i in range(len(x)):
+        temp = x[i]
+        if isinstance(temp, (np.ndarray, jnp.ndarray)):
+            # If it's a scalar array like np.array([1.0]), return the scalar
+                new_x.append(temp.item())
+        else:
+            new_x.append(temp)  # Already a scalar or something else
+    return new_x
 
-def objective(Vp, R, L, C):
+def objective(x):
+    Vp, R, L, C = x[0], x[1]*1e-3, x[2]*1e-7, x[3]*1e-6
     # Vp = jnp.array(extract_value(Vp))
     results = call_tess(Vc0, T_input, Vp, n0, tesseract_api, R, L, C) 
     dt = results["ts"][1] - results["ts"][0]
+    results["R"], results["L"], results["C"] = results["R"]/1e-3, results["L"]/1e-7, results["C"]/1e-6
     diff = fusion_power(results["n"], Lz, results["a"], results["T"]) - bremsstrahlung_power(results["n"], Lz, results["a"], results["T"])
     return -diff.sum() * dt
 
-print(jax.grad(objective)(Vp_input))
 
-def grad_obj(Vp):
-    Vp = jnp.array(extract_value(Vp))
-    return jax.grad(objective)(Vp)
+Vp = 1920
+x = [float(Vp), float(R), float(L), float(C)]
+print(jax.grad(objective)(x))
 
-def scipy_vg(_Vp):
+def grad_obj(x):
+    x = jnp.array(extract_value(x))
+    return jax.grad(objective)(x)
+
+def scipy_vg(_x):
     # """Value and gradient function for scipy optimization."""
     # __Vp = jnp.array(_Vp)
-    __Vp = jnp.array(extract_value(_Vp))  
+    __x = jnp.array(extract_value(_x))  
 
-    fval, gradVal = fgrad_fn(__Vp)
+    fval, gradVal = fgrad_fn(__x)
     fval = np.array(fval)
     gradVal = np.array(gradVal)
     return fval, gradVal
     
-print(f"Vp: {Vp_input}, Objective: {objective(Vp_input)}")
-print(f"grad: {grad_obj(Vp_input)}")
+# print(f"Vp: {Vp_input}, Objective: {objective(Vp_input)}")
+# print(f"grad: {grad_obj(x)}")
 
-f = lambda Vp: objective(Vp)
+f = lambda x: objective(x)
 fgrad_fn = jax.value_and_grad(f)
     
-fval, gradVal = fgrad_fn(Vp_input)
-print(f"Value and Gradient of objective function at Vp={Vp_input} f: {fval:.5f} W df/dx: {gradVal:.5f} W/V")
+fval, gradVal = fgrad_fn(x)
 
-res = opt.minimize(scipy_vg, Vp_input, method='L-BFGS-B', jac=True, options={'disp': True, 'maxiter': 100}, bounds=[(400, 10e3)])
+bounds = [(500,3000),
+          (1, 2),
+          (1, 3),
+          (221, 222)]
+res = opt.minimize(scipy_vg, x, method='L-BFGS', jac=True, options={'disp': True, 'maxiter': 1000}, bounds=bounds)
 
-# # Use scipy minimize with L-BFGS-B
-# res = minimize(fun=objective, x0=Vp_input, jac=grad_obj, method='L-BFGS-B')
+# # # Use scipy minimize with L-BFGS-B
+# # res = minimize(fun=objective, x0=Vp_input, jac=grad_obj, method='L-BFGS-B')
 
-# Print result
+# # Print result
 print("Optimal x:", res.x)
 print("Final loss:", res.fun)
 print("Converged:", res.success)
 
-# solver = optax.lbfgs()
-# params = jnp.array(Vp_input)
-# opt_state = solver.init(params)
-# for i in range(2):
-#     print(i)
-#     grad = grad_obj(params)
-#     updates, opt_state = solver.update(grad, opt_state, params)
-#     params = optax.apply_updates(params, updates)
-#     print('Objective function: {:.2E}'.format(objective(params)))
+# # solver = optax.lbfgs()
+# # params = jnp.array(Vp_input)
+# # opt_state = solver.init(params)
+# # for i in range(2):
+# #     print(i)
+# #     grad = grad_obj(params)
+# #     updates, opt_state = solver.update(grad, opt_state, params)
+# #     params = optax.apply_updates(params, updates)
+# #     print('Objective function: {:.2E}'.format(objective(params)))
 
